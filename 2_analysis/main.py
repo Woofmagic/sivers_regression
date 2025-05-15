@@ -1,7 +1,32 @@
 SETTING_VERBOSE = True
 SETTING_DEBUG = False
 
+
+_MASS_OF_PROTON_IN_GEV = .93827208816
+
+PDF_CSV_DATA = 'pdf_data.csv'
+PDF_CSV_DATA_COLUMN_HEADER_X = 'x'
+PDF_CSV_DATA_COLUMN_HEADER_Q_SQUARED = 'QQ'
+
+k_perpendicular_squared_average = 0.57
+
+_DEFAULT_N_Q_VALUE = 0.3
+_DEFAULT_LAMBDA_VALUE = 0.2
+_DEFAULT_SIGMA_VALUE = 0.5
+
+MINIMUM_X_VALUE = 0.01
+MAXIMUM_X_VALUE = 0.3
+
+MINIMUM_Y_VALUE = 0.
+MAXIMUM_Y_VALUE = 2.
+
 does_user_have_lhapdf = False
+
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+import matplotlib.pyplot as plt
+from scipy.optimize import curve_fit
 
 try:
     import lhapdf
@@ -11,15 +36,7 @@ try:
 except ImportError:
     print('> LHAPDF not installed... Generating grids without it.')
 
-PDF_CSV_DATA = 'pdf_data.csv'
-PDF_CSV_DATA_COLUMN_HEADER_X = 'x'
-PDF_CSV_DATA_COLUMN_HEADER_Q_SQUARED = 'QQ'
-
-import numpy as np
-import pandas as pd
-import tensorflow as tf
-import matplotlib.pyplot as plt
-from scipy.optimize import curve_fit
+PDF_DATA = lhapdf.mkPDF(pdfset)
 
 class A0(tf.keras.layers.Layer):
     def __init__(self, kperp2avg=.57, pperp2avg=.12, **kwargs):
@@ -53,8 +70,6 @@ class Quotient(tf.keras.layers.Layer):
         if len(inputs) != 2 or inputs[0].shape[1] != 1:
             raise ValueError('Inputs must be two tensors of shape (?, 1)')
         return inputs[0] / inputs[1]
-
-k_perpendicular_squared_average = 0.57
 
 if SETTING_VERBOSE:
     print(f"> Now running TF version: {tf.__version__}")
@@ -104,9 +119,6 @@ def evaluate_dnn_representation_of_n_q(tf_model, x_values, hadron_string_identif
     
     # (): Evaluate the Keras model by passing in a value for x:
     model_evaluated_at_specific_x_value = model_function(x_values)
-    # print(model_evaluated_at_specific_x_value)
-    # print(model_evaluated_at_specific_x_value[0])
-    # print(model_evaluated_at_specific_x_value.flatten())
 
     # (): Return the numerical evaluation:
     return model_evaluated_at_specific_x_value.flatten()
@@ -129,11 +141,10 @@ def evaluate_transverse_momentum_distribution(tf_model, k_perpendicular_values):
 def evaluate_parton_distribution_function(quark_flavor, x_values, q_squared_values):
     """
     """
-    pdfData = lhapdf.mkPDF(pdfset)
 
     # (1): `.xfxQ2(quark_flavor, )` evaluates x*f(x, Q^{2}) for given quark flavor at a particular Q^{2}:
     # return np.array([pdfData.xfxQ2(quark_flavor, figure_axes_1, q_squared) for figure_axes_1, q_squared in zip(x_values, q_squared_values)])
-    return pdfData.xfxQ2(quark_flavor, x_values, q_squared_values)
+    return np.array([(PDF_DATA.xfxQ2(quark_flavor, x_value, q_squared_values)) for x_value in x_values])
 
 def evaluate_f_quark_fraction_of_proton(quark_flavor, x_values, q_squared_values, k_perpendicular_values):
     """
@@ -145,8 +156,14 @@ def evaluate_f_quark_fraction_of_proton(quark_flavor, x_values, q_squared_values
     which carries the x-dependence and a Gaussian distribution of transverse
     momentum.
     """
+
+    # (): 
+    # - verified that shape(x_values) = shape(quark_pdf):
     quark_pdf = evaluate_parton_distribution_function(quark_flavor, x_values, q_squared_values)
-    
+    print(f"x = {x_values[0:12]}, PDF: {quark_pdf[0:12]}")
+        
+    # (): A gaussian-distributed transverse momentum function:
+    # - verified correct output on 20250512
     transverse_momentum_distribution = np.exp(-k_perpendicular_values**2 / k_perpendicular_squared_average) / (np.pi * k_perpendicular_squared_average)
 
     f_sub_q_over_p = quark_pdf * transverse_momentum_distribution
@@ -194,16 +211,21 @@ def evaluate_dnn_parametrized_sivers_function(quark_flavor, dnn_model, x_values,
     hadron_string_identifier = find_hadron_string(quark_flavor)
 
     # (): Evaluate the DNN for N_{q} for the given hadron string:
+    # - confirmed this approach matches the old code on 20250512
     dnn_representation_of_n_q = evaluate_dnn_representation_of_n_q(dnn_model, x_values_flattened, hadron_string_identifier)
 
     if SETTING_VERBOSE:
         print(f"> Length of DNN computation with vectorized x-values is: {len(dnn_representation_of_n_q)}")
 
+    # (): Evaluate the distribution of perpendicular momentum:
+    # - confirmed this approach matches the old code on 20250512
     k_perpendicular_distribution = evaluate_transverse_momentum_distribution(dnn_model, k_perpendicular_values_flattened)
 
     if SETTING_VERBOSE:
         print(f"> Length of computed k-perp distribution is: {len(k_perpendicular_distribution)}")
 
+    # (): Evaluate the f_{q/N} function (unpolarized Sivers): 
+    # - verified expected output on 20250512
     f_quark_over_proton = evaluate_f_quark_fraction_of_proton(
         quark_flavor,
         x_values_flattened,
@@ -211,6 +233,7 @@ def evaluate_dnn_parametrized_sivers_function(quark_flavor, dnn_model, x_values,
         k_perpendicular_values_flattened)
 
     dnn_sivers_function_flattened = 2. * dnn_representation_of_n_q * k_perpendicular_distribution * f_quark_over_proton
+    print(dnn_sivers_function_flattened)
 
     dnn_sivers_function_normal_shape = dnn_sivers_function_flattened.reshape(x_grid_values.shape)
 
@@ -230,15 +253,13 @@ def sivers_ansatz(independent_variables, *function_parameters):
         2. \Lambda(x, Q^{2})
         3. \sigma_{q}(x, Q^{2})
     """
-    _DEFAULT_N_Q_VALUE = 0.3
-    _DEFAULT_LAMBDA_VALUE = 0.2
-    _DEFAULT_SIGMA_VALUE = 0.5
 
     parameter_n_q, parameter_lambda, parameter_sigma = function_parameters
 
     k_perpendicular, x_values = independent_variables
 
-    return parameter_n_q * k_perpendicular / (k_perpendicular**2 + parameter_lambda) * np.exp(-k_perpendicular**2 / parameter_sigma)
+    # return parameter_n_q * _MASS_OF_PROTON_IN_GEV * k_perpendicular / (k_perpendicular**2 + parameter_lambda) * np.exp(-k_perpendicular**2 / parameter_sigma)
+    return parameter_n_q * _MASS_OF_PROTON_IN_GEV * np.exp(-k_perpendicular**2 / parameter_sigma) / (k_perpendicular**2 + parameter_lambda)
 
 def evaluate_function_on_meshgrid(function, variable_ranges, **params):
     """
@@ -286,13 +307,6 @@ if not does_user_have_lhapdf:
     # (): Generate an NumPy array of k_perp values from 0. to 1.5 according to number of x values:
     k_perpendicular_values = np.linspace(0., 1.5, len(x_values))
 
-
-MINIMUM_X_VALUE = 0.01
-MAXIMUM_X_VALUE = 0.3
-
-MINIMUM_Y_VALUE = 0.
-MAXIMUM_Y_VALUE = 2.
-
 x_values = np.linspace(MINIMUM_X_VALUE, MAXIMUM_X_VALUE, 30) 
 k_perpendicular_values = np.linspace(MINIMUM_Y_VALUE, MAXIMUM_Y_VALUE, 30)
 
@@ -321,43 +335,45 @@ optimized_parameters_up_quark, parameter_covariance_up_quark = curve_fit(
         f = sivers_ansatz, 
         xdata = np.vstack((x_grid_values.ravel(), k_perpendicular_grid_values.ravel())), 
         ydata = sivers_prediction_up_quark.ravel(), 
-        p0 = [0.1, 0.2, 0.2])
+        p0 = [100.0, 100.0, 100.0],
+        maxfev = 5000)
 optimized_parameters_down_quark, parameter_covariance_down_quark = curve_fit(
         f = sivers_ansatz, 
         xdata = np.vstack((x_grid_values.ravel(), k_perpendicular_grid_values.ravel())),
         ydata = sivers_prediction_down_quark.ravel(), 
-        p0 = [0.1, 0.2, 0.2])
+        p0 = [100.0, 100.0, 100.0],
+        maxfev = 5000)
 optimized_parameters_strange_quark, parameter_covariance_strange_quark = curve_fit(
         f = sivers_ansatz, 
         xdata = np.vstack((x_grid_values.ravel(), k_perpendicular_grid_values.ravel())),
         ydata = sivers_prediction_strange_quark.ravel(), 
-        p0 = [0.1, 0.2, 0.2])
+        p0 = [100.0, 100.0, 100.0],
+        maxfev = 5000)
 optimized_parameters_anti_up_quark, parameter_covariance_anti_up_quark = curve_fit(
         f = sivers_ansatz, 
         xdata = np.vstack((x_grid_values.ravel(), k_perpendicular_grid_values.ravel())), 
         ydata = sivers_prediction_anti_up_quark.ravel(), 
-        p0 = [0.1, 0.2, 0.2])
+        p0 = [100.0, 100.0, 100.0],
+        maxfev = 5000)
 optimized_parameters_anti_down_quark, parameter_covariance_anti_down_quark = curve_fit(
         f = sivers_ansatz, 
         xdata = np.vstack((x_grid_values.ravel(), k_perpendicular_grid_values.ravel())),
         ydata = sivers_prediction_anti_down_quark.ravel(), 
-        p0 = [0.1, 0.2, 0.2])
+        p0 = [100.0, 100.0, 100.0],
+        maxfev = 5000)
 optimized_parameters_anti_strange_quark, parameter_covariance_anti_strange_quark = curve_fit(
         f = sivers_ansatz, 
         xdata = np.vstack((x_grid_values.ravel(), k_perpendicular_grid_values.ravel())),
         ydata = sivers_prediction_anti_strange_quark.ravel(), 
-        p0 = [0.1, 0.2, 0.2])
+        p0 = [100.0, 100.0, 100.0],
+        maxfev = 5000)
 
-print(optimized_parameters_up_quark)
-print(len(optimized_parameters_up_quark))
-print(f"> Optimized parameters for the up quark Sivers are: {optimized_parameters_up_quark}")
-print(f"> Optimized parameters for the down quark Sivers are: {optimized_parameters_down_quark}")
-print(f"> Optimized parameters for the sivers quark Sivers are: {optimized_parameters_strange_quark}")
-print(f"> Optimized parameters for the anti up quark Sivers are: {optimized_parameters_anti_up_quark}")
-print(f"> Optimized parameters for the anti down quark Sivers are: {optimized_parameters_anti_down_quark}")
-print(f"> Optimized parameters for the anti strange quark Sivers are: {optimized_parameters_anti_strange_quark}")
-
-
+# print(f"> Optimized parameters for the up quark Sivers are: {optimized_parameters_up_quark}")
+# print(f"> Optimized parameters for the down quark Sivers are: {optimized_parameters_down_quark}")
+# print(f"> Optimized parameters for the sivers quark Sivers are: {optimized_parameters_strange_quark}")
+# print(f"> Optimized parameters for the anti up quark Sivers are: {optimized_parameters_anti_up_quark}")
+# print(f"> Optimized parameters for the anti down quark Sivers are: {optimized_parameters_anti_down_quark}")
+# print(f"> Optimized parameters for the anti strange quark Sivers are: {optimized_parameters_anti_strange_quark}")
 
 sivers_functions_array = [
     (sivers_prediction_up_quark, 2, "up", "red", optimized_parameters_up_quark),
@@ -367,6 +383,10 @@ sivers_functions_array = [
     (sivers_prediction_anti_down_quark, -1, "anti_down", "orange", optimized_parameters_anti_down_quark),
     (sivers_prediction_anti_strange_quark, -3, "anti_strange", "purple", optimized_parameters_anti_strange_quark),
 ]
+
+# sivers_functions_array = [
+#     (sivers_prediction_up_quark, 2, "up", "red", optimized_parameters_up_quark),
+# ]
 
 
 # (X, Y), Z = evaluate_function_on_meshgrid(sivers_ansatz, [ x_values, k_perpendicular_values ], n = 0.1, l = 0.2, sigma = 0.2)
@@ -387,7 +407,7 @@ for (sivers_function_representation, quark_numerical_label, quark_label, color, 
         axes.text(0.6, 0.95 -  0.1 * index, fr'$\theta_{index + 1}={item}$', fontsize=12, transform=axes.transAxes)
     axes.text(0.03, 0.95, fr'$Q^2={q_squared_value[0]}$ GeV$^2$', fontsize=12, transform=axes.transAxes)
     axes.text(0.03, 0.90, fr'$x={x_target}$', fontsize=12, transform=axes.transAxes)
-    plt.savefig(f"{quark_label}_vs_kperp_at_{x_target}_v3_2.png")
+    plt.savefig(f"{quark_label}_vs_kperp_at_{x_target}_v3_4.png")
     plt.close()
 
     figure, axes = plt.subplots(subplot_kw = {"projection": "3d"})
@@ -396,16 +416,20 @@ for (sivers_function_representation, quark_numerical_label, quark_label, color, 
     axes.set_ylabel(r'$k_{\perp}$', fontsize=12)
     axes.set_zlabel(r'$x \Delta f^N (x,k_{\perp})$', fontsize=12)
     axes.set_title(rf"Quark: {find_quark_string(quark_numerical_label)}", fontsize=14)
-    plt.savefig(f"{quark_label}_quark_surface_plot_v3_2.png")
+    plt.savefig(f"{quark_label}_quark_surface_plot_v3_4.png")
     plt.close()
 
-    figure, axes = plt.subplots(subplot_kw = {"projection": "3d"})
-    axes.plot_surface(x_grid_values, k_perpendicular_grid_values, sivers_ansatz((x_grid_values, k_perpendicular_grid_values), *parameters), color = color, alpha = 0.6)
-    axes.set_xlabel(r'$x$', fontsize=12)
-    axes.set_ylabel(r'$k_{\perp}$', fontsize=12)
-    axes.set_zlabel(r'$x \Delta f^N (x,k_{\perp})$', fontsize=12)
-    axes.set_title(f"Quark: {find_quark_string(quark_numerical_label)}", fontsize=14)
-    plt.savefig(f"{quark_label}_fit_surface_plot_v3_2.png")
+    figure, axes = plt.subplots(1, 2, figsize = (10, 5), subplot_kw = {"projection": "3d"})
+    axes[0].plot_surface(x_grid_values, k_perpendicular_grid_values, sivers_ansatz((x_grid_values, k_perpendicular_grid_values), *parameters), color = "gray", alpha = 0.6)
+    axes[1].plot_surface(x_grid_values, k_perpendicular_grid_values, sivers_function_representation, color = color, alpha = 0.6)
+    axes[0].set_xlabel(r'$x$', fontsize=12)
+    axes[0].set_ylabel(r'$k_{\perp}$', fontsize=12)
+    axes[0].set_title(f"Quark: {find_quark_string(quark_numerical_label)}", fontsize=14)
+    axes[1].set_xlabel(r'$x$', fontsize=12)
+    axes[1].set_ylabel(r'$k_{\perp}$', fontsize=12)
+    axes[1].set_zlabel(r'$x \Delta f^N (x,k_{\perp})$', fontsize=12)
+    axes[1].set_title(f"Quark: {find_quark_string(quark_numerical_label)}", fontsize=14)
+    plt.savefig(f"{quark_label}_fit_surface_plot_v3_4.png")
     plt.close()
 
     x_cuts = [0.0, 0.25, 0.5, 0.75, 1.0]
@@ -427,16 +451,19 @@ for (sivers_function_representation, quark_numerical_label, quark_label, color, 
 
         figure, axes = plt.subplots(1, 1, figsize = (10, 5))
 
-        axes.plot(k_perpendicular_grid_values, true_slice, label = f'{find_quark_string(quark_numerical_label)}')
-        axes.plot(k_perpendicular_grid_values, fit_slice[:, index], '-', label='Fit')
+        axes.plot(k_perpendicular_grid_values[:, index], true_slice, label = f'DNN Representation for {find_quark_string(quark_numerical_label)}')
+        axes.plot(k_perpendicular_grid_values[:, index], fit_slice[:, index], '-', label = f'Symbolic Fit for {find_quark_string(quark_numerical_label)}')
         axes.set_title(rf'Projection at $x = {x_value:.2f}$')
         axes.set_xlabel(r'$k_{\perp}$')
         axes.set_ylabel(r'$x \Delta f^N (x, k_{\perp})$')
+        for index, item in enumerate(parameters):
+            axes.text(0.6, 0.95 -  0.1 * index, fr'$\theta_{index + 1}={item}$', fontsize=12, transform=axes.transAxes)
+            axes.text(0.03, 0.95, fr'$Q^2={q_squared_value[0]}$ GeV$^2$', fontsize=12, transform=axes.transAxes)
         axes.text(0.03, 0.95, fr'$Q^2={q_squared_value[0]}$ GeV$^2$', fontsize=12, transform=axes.transAxes)
         axes.text(0.03, 0.90, fr'$x={x_value}$', fontsize=12, transform=axes.transAxes)
         plt.legend()
         plt.tight_layout()
-        plt.savefig(f"sivers_{quark_label}_{x_value}_cut_v3_2.png")
+        plt.savefig(f"sivers_{quark_label}_{x_value}_cut_v3_4.png")
         plt.close()
 
 flavors = [
@@ -449,17 +476,19 @@ flavors = [
 ]
 
 fig, axes = plt.subplots(2, 3, figsize=(18, 10), subplot_kw={'projection': '3d'})
-for ax, (sivers_function_representation, quark_numerical_label, quark_label) in zip(axes.flat, sivers_functions_array):
-    ax.plot_surface(x_grid_values, k_perpendicular_grid_values, sivers_function_representation, alpha=0.6)
+for ax, (sivers_function_representation, quark_numerical_label, quark_label, color, parameters) in zip(axes.flat, sivers_functions_array):
+    ax.plot_surface(x_grid_values, k_perpendicular_grid_values, sivers_function_representation, alpha=0.6, color = color)
     ax.set_xlabel(r'$x$', fontsize=12)
     ax.set_ylabel(r'$k_{\perp}$', fontsize=12)
     ax.set_zlabel(r'$x \Delta f^N (x,k_{\perp})$', fontsize=12)
     ax.set_title(f"Quark: ${quark_label}$", fontsize=14)
+    for index, item in enumerate(parameters):
+        ax.text(x = 0.6, y = 0.95 -  0.1 * index, z = 1., s = fr'$\theta_{index + 1}={item}$', fontsize=12, transform=ax.transAxes)
 
 # Adjust layout for better spacing
 plt.tight_layout()
 
-plt.savefig('combined_surface_plots_v3_2')
+plt.savefig('combined_surface_plots_v3_4')
 
 # Create figure and 3D axes
 fig = plt.figure(figsize=(14, 6))
@@ -489,6 +518,6 @@ ax2.legend()
 # Adjust layout and show
 plt.tight_layout()
 
-plt.savefig('surface_plots_v3_2.png') 
+plt.savefig('surface_plots_v3_4.png') 
 
 plt.close()
