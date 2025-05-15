@@ -63,6 +63,9 @@ def h(model, kperp):
 
 def pdf(flavor, x, QQ):
 
+    for x_value, qvalue in zip(x, QQ):
+        print(f"x = {x_value}, q^2 = {qvalue}")
+
     # (1): `.xfxQ2(flavor, )` evaluates x*f(x, Q^{2}) for given quark flavor at a particular Q^{2}:
     return np.array([pdfData.xfxQ2(flavor, figure_axes_1, qq) for figure_axes_1, qq in zip(x, QQ)])
 
@@ -70,18 +73,26 @@ def fqp(x, QQ, kperp2avg, kperp, flavor):
 
     # (): Obtain the "f" function for a given quark ("q") flavor
     fq = pdf(flavor, x, QQ)
+    print(f"x = {x}, {fq}")
     return fq * (1. / (np.pi * kperp2avg)) * np.exp(-kperp**2 / kperp2avg)
 
 def xsivdist(model, x, QQ, kperp2avg, flavor, kperp):
+    # x is passed in as a single number
+    # kperp is also a single number...
+    
     refDict = {-3: 'nnsbar',
                -2: 'nnubar',
                -1: 'nndbar',
                1: 'nnd',
                2: 'nnu',
                3: 'nns'}
+    
+
+    # this then returns what..
     nnqval = nnq(model, np.array([x]), refDict[flavor])
-    #nnqval = nnq(model , np.array([x]), refDict[flavor])[:,0] np.array([x])
+    
     hval = h(model, kperp)
+
     if(flavor == -3):
         fqpval = fqpsbar
     if(flavor == -2):
@@ -94,13 +105,26 @@ def xsivdist(model, x, QQ, kperp2avg, flavor, kperp):
         fqpval = fqpu
     if(flavor == 3):
         fqpval = fqps
-    #fqpval = fqp([x], [QQ], kperp2avg, kperp, flavor)
+
+    # print(f"x = {x}, kperp = {kperp}, fqpval = {fqpval}")
+    print(f"Shape of nnqval: {np.shape(nnqval)}")
+    print(nnqval)
+    print(f"Shape of hval: {np.shape(hval)}")
+    print(hval)
+    print(f"Shape of nnqval*hval: {np.shape(nnqval*hval)}")
+    print(nnqval*hval)
+    print(f"Shape of fqpval: {np.shape(fqpval)}")
+    print(f"Shape of the entire product: {np.shape(2*nnqval*hval*fqpval)}")
+    print(f"Shape of the entire product: {np.shape((2*nnqval*hval*fqpval)[0, :])}")
+
+    # print(2*nnqval*hval*fqpval)
+    # print(f"x = {x}, kperp = {kperp}, Total = {((2*nnqval*hval*fqpval)[0, :])}")
     return ((2*nnqval*hval*fqpval)[0, :])
 #############################################################################
 
 ## Here is where we need to create the kinematics grid ##
-kperp_vals=np.array(list(range(150)))/100
-kperp_vals=tf.constant(kperp_vals)
+kperp_vals = np.array(list(range(150)))/100
+kperp_vals = tf.constant(kperp_vals)
 
 fqpu = fqp([0.1], [2.4], 0.57, kperp_vals, 2)
 
@@ -137,6 +161,7 @@ def compute_siv(flavor):
 
 # Compute distributions for quarks
 siv_u = compute_siv(2)
+print("DONE MOTHAFUCKA")
 siv_d = compute_siv(1)
 siv_s = compute_siv(3)
 

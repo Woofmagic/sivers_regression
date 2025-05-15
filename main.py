@@ -314,7 +314,7 @@ x_grid_values, k_perpendicular_grid_values = np.meshgrid(x_values, k_perpendicul
 
 q_squared_value = np.array([2.4])
 
-model_path = '../app/models/rep150.h5'
+model_path = './app/models/rep150.h5'
 
 average_model = tf.keras.models.load_model(
     model_path,
