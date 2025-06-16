@@ -384,13 +384,6 @@ sivers_functions_array = [
     (sivers_prediction_anti_strange_quark, -3, "anti_strange", "purple", optimized_parameters_anti_strange_quark),
 ]
 
-# sivers_functions_array = [
-#     (sivers_prediction_up_quark, 2, "up", "red", optimized_parameters_up_quark),
-# ]
-
-
-# (X, Y), Z = evaluate_function_on_meshgrid(sivers_ansatz, [ x_values, k_perpendicular_values ], n = 0.1, l = 0.2, sigma = 0.2)
-
 for (sivers_function_representation, quark_numerical_label, quark_label, color, parameters) in sivers_functions_array:
     
     if SETTING_VERBOSE:
